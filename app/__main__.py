@@ -517,6 +517,28 @@ def _fetch_url_to(url: str, dest: Path) -> None:
         shutil.copyfileobj(response, out)
 
 
+# R44: search drives qBittorrent's WebUI, and a fresh qBittorrent has the
+# WebUI off, so a "connection refused" on 127.0.0.1:8080 is the single most
+# likely reason search fails for a new user. When an exception looks like
+# that, the log line carries the exact fix instead of a bare error.
+_QBIT_HINT = ("Search needs qBittorrent running with its WebUI on: open "
+              "qBittorrent \u2192 Tools \u2192 Options \u2192 Web UI \u2192 "
+              "tick \u201cEnable the Web User Interface\u201d AND \u201cBypass "
+              "authentication for clients on localhost\u201d \u2192 OK.")
+
+
+def _qbit_hint(exc: BaseException) -> str:
+    """The qBittorrent setup hint when exc looks like a dead WebUI, else ''."""
+    text = str(exc).lower()
+    if any(needle in text for needle in (
+            "connection refused", "connectionreset", "connection reset",
+            "name or service not known", "temporarily unavailable",
+            "webui", "web ui", "refused", "timed out", "timeout",
+            "couldn't connect", "cannot connect")):
+        return _QBIT_HINT
+    return ""
+
+
 class _NoKeyClient:
     """Stand-in Torbox client for when TORBOX_API_KEY is missing.
 
@@ -3854,10 +3876,11 @@ class App(_TkBase):
             before = {str(p.get("name")): str(p.get("version"))
                       for p in (self.qbit.plugins() or []) if p.get("name")}
         except Exception as exc:
-            self.post_event("log",
-                            "Search plugin list unavailable: "
-                            f"{exc}. Search needs qBittorrent running with "
-                            "its WebUI enabled.")
+            hint = _qbit_hint(exc)
+            self.post_event(
+                "log",
+                f"Search plugin list unavailable: {exc}. Search needs "
+                "qBittorrent running with its WebUI enabled." + hint)
             return
         try:
             self.qbit.update_plugins()
@@ -4034,8 +4057,10 @@ class App(_TkBase):
                 return
             post_drop_line()
             # Friendly message only; qbit/gofile/torbox errors never carry secrets.
-            self.post_event("log", str(exc) or type(exc).__name__)
-            self.post_event("status", (False, str(exc) or "Search failed"))
+            exc_text = str(exc) or type(exc).__name__
+            self.post_event("log", (exc_text + (" " + _qbit_hint(exc)
+                                                if _qbit_hint(exc) else "")))
+            self.post_event("status", (False, exc_text or "Search failed"))
         finally:
             # Only the still-current worker cleans up: a replaced worker's job
             # is handled by the replace thread (and, if the job id only arrived

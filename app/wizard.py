@@ -104,6 +104,24 @@ def run_startup_wizard(env_path: Path) -> bool:
     tok_box = ttk.Entry(frame, show="\u2022", width=52)
     tok_box.pack(fill="x", pady=(2, 10))
 
+    # R44 (user ask): search runs through qBittorrent's WebUI, and a fresh
+    # qBittorrent has the WebUI off, so search silently can't work. Spell
+    # the five clicks out right here — including the localhost bypass,
+    # which is the one everyone misses (the WebUI will not even start
+    # without credentials unless localhost is exempted).
+    ttk.Separator(frame).pack(fill="x", pady=(2, 8))
+    ttk.Label(frame, text="Search also needs qBittorrent (3 clicks):",
+              font=("", 10, "bold")).pack(anchor="w")
+    ttk.Label(frame, text=(
+        "1. Open qBittorrent (not installed yet? Windows: winget install\n"
+        "    qBittorrent  |  Linux: install the qbittorrent package).\n"
+        "2. Tools menu \u2192 Options \u2192 \u201cWeb UI\u201d tab.\n"
+        "3. Tick \u201cEnable the Web User Interface (Remote control)\u201d"
+        " (port 8080).\n"
+        "4. Tick \u201cBypass authentication for clients on localhost\u201d.\n"
+        "5. Click OK. That is all \u2014 search works from then on."
+    ), justify="left", foreground="#555555").pack(anchor="w", pady=(2, 10))
+
     note = ttk.Label(frame, text="", foreground="#a04000")
     note.pack(anchor="w")
 

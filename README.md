@@ -49,7 +49,16 @@ which Linux usually has via the system python3-tk package):
 
 ## Setup
 
-You need two API keys, each free to get:
+Search needs qBittorrent with its Web UI on (3 clicks):
+
+1. Open qBittorrent (not installed yet? Windows: `winget install
+   qBittorrent`; Linux: install the `qbittorrent` package).
+2. Tools menu → Options → "Web UI" tab.
+3. Tick "Enable the Web User Interface (Remote control)" (port 8080).
+4. Tick "Bypass authentication for clients on localhost".
+5. Click OK. Done.
+
+You also need two API keys, each free to get:
 
 - Torbox: an API key from torbox.app (Settings → API).
 - GoFile: a token from gofile.io (account settings; the free tier works).
