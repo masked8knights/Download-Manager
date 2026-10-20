@@ -299,6 +299,7 @@ POLL_INTERVAL = 3.0          # seconds between engine.refresh() passes
 POLL_FAILURE_ECHO = 60.0     # log repeated poll failures at most once a minute
 DOWNLOAD_POLL_INTERVAL = 2.0     # store checks while "Download & Unpack" waits
 DOWNLOAD_UNPACK_DEADLINE = 30 * 60.0  # give up waiting for completion after 30 min
+TORBOX_NUDGE_WINDOW = 10.0   # R46: min seconds between auto TORBOX refreshes
 GOFILE_TTL_INTERVAL = 6 * 3600.0  # seconds between GoFile TTL expiry passes
 
 # R26b: when GoFile still rate-limits a job after the quick in-request
@@ -625,6 +626,7 @@ class App(_TkBase):
         self._stop_poll = threading.Event()
         self._asked_complete: set[str] = set()      # infohashes already popup-asked
         self._known_status: dict[str, str] = {}     # infohash -> last seen status
+        self._torbox_nudge_last = 0.0   # R46: last auto TORBOX refresh time
         # R26b: GoFile jobs that exhausted their quick rate-limit retries sit
         # here until their scheduled retry time. infohash -> {"name", "kind",
         # "due", "attempts", "reason"}; kind "upload" re-runs _start_upload,
@@ -3493,12 +3495,19 @@ class App(_TkBase):
     def _on_downloads_changed(self, changed: dict) -> None:
         """Engine poll results: update rows, detect the complete transition,
         and (R36) catch handed-off torrents reaching the cached state."""
+        nudged = False   # R46: a download finished on Torbox -> refresh its table
         for infohash, record in changed.items():
             if not isinstance(record, dict):
                 continue
             old = self._known_status.get(infohash)
             new = record.get("status") or ""
             self._known_status[infohash] = new
+            # R46: a real transition into "held" (cached on Torbox) or
+            # "complete" (fetched to this PC's store) means the TORBOX
+            # FILES table's row for it is stale — nudge a quiet refresh
+            # instead of waiting for the half-hour auto-refresh timer.
+            if old is not None and old != new and new in ("held", "complete"):
+                nudged = True
             # R36: a handed-off torrent is now cached on Torbox ("held") —
             # or went straight to complete. Notify and act on the default.
             if infohash in self._handoff_pending and new in ("held", "complete"):
@@ -3517,7 +3526,23 @@ class App(_TkBase):
                     self._asked_complete.add(infohash)   # ask once per download
                     self._ask_upload_popup(infohash,
                                            record.get("name") or infohash)
+        if nudged:
+            self._nudge_torbox_table()
         self._refresh_downloads_table()
+
+    def _nudge_torbox_table(self) -> None:
+        """R46: refresh the TORBOX FILES table right after a download
+        transitioned to cached/complete, so its status column updates
+        automatically (user ask). Coalesced: at most one fetch per
+        TORBOX_NUDGE_WINDOW seconds, however many torrents finished in
+        the same burst; the half-hour timer still covers everything else.
+        Runs on the UI thread (the caller already is) but only starts the
+        usual daemon worker, so the network never blocks the interface."""
+        now = time.monotonic()
+        if now - self._torbox_nudge_last < TORBOX_NUDGE_WINDOW:
+            return  # one already ran (or is due) inside the window
+        self._torbox_nudge_last = now
+        self.on_torbox_search()
 
     def _on_download_added(self, payload: tuple) -> None:
         infohash, name = payload
