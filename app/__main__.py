@@ -198,6 +198,7 @@ from gofile import GofileClient, GofileError
 from presets import Presets
 from qbitsearch import QBitError, QBitSearchClient, SearchItem, human_size
 import qbitstart
+import trayicon
 from theme import Theme, apply_theme
 from icons import cog_photo, folder_photo
 from icon import make_photo_image
@@ -724,6 +725,23 @@ class App(_TkBase):
                          daemon=True, name="qbit-autostart").start()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        # R48: open into the system tray when a tray exists and TRAY_START
+        # is not off. trayicon.create() returns None on a desktop with no
+        # usable tray (and when pystray/Pillow are missing), and the window
+        # then stays visible — the app must never sit invisible. Quitting,
+        # from the window's X or the tray's Quit, removes the icon with the
+        # process (on_close stops the tray first).
+        self._tray = None
+        try:
+            self._tray = trayicon.create(
+                str(BUNDLE_ROOT / "icon.ico"), "Torbox Downloader",
+                self._tray_show, self._tray_quit,
+                lambda text: self.post_event("log", text.rstrip("\n")))
+            if self._tray is not None and self.config.tray_start:
+                self.withdraw()
+        except Exception as exc:  # never let tray trouble kill the window
+            self._tray = None
+            self.post_event("log", f"Tray setup failed: {exc}")
         self.after(100, self._drain)
         # R22c: the top activity bar's 1-second refresh tick.
         self.after(1000, self._tick_progress)
@@ -1545,6 +1563,16 @@ class App(_TkBase):
                 kind, payload = self._events.get_nowait()
                 if kind == "log":
                     self.log_line(str(payload))
+                elif kind == "tray_show":
+                    # R48: the tray's Show action arrives on the tray
+                    # thread; repaint the window on the UI thread.
+                    self.deiconify()
+                    self.lift()
+                    self.focus_force()
+                elif kind == "quit":
+                    # R48: the tray's Quit marshals the close onto the
+                    # Tk main thread through this queue.
+                    self.on_close()
                 elif kind == "status":
                     ok, text = payload
                     self.set_status(ok, text)
@@ -5303,8 +5331,23 @@ class App(_TkBase):
 
     # ---- shutdown -----------------------------------------------------------------------------------
 
+    # ---- R48: tray callbacks ----------------------------------------------
+    # Both run on the tray's own thread; the actual Tk work happens on the
+    # UI thread via the event queue (_drain handles tray_show and quit).
+
+    def _tray_show(self) -> None:
+        self.post_event("tray_show", None)
+
+    def _tray_quit(self) -> None:
+        self.post_event("quit", None)
+
     def on_close(self) -> None:
         self._closing = True
+        # R48: remove the tray icon with the process so nothing lingers.
+        tray = getattr(self, "_tray", None)
+        if tray is not None:
+            tray.stop()
+            self._tray = None
         self._stop_poll.set()
         # R23: end every in-flight job the Stop button could have stopped,
         # so the workers exit instead of streaming on behind the window.
@@ -5399,6 +5442,12 @@ def main() -> None:
         config = Config()
     app = App(config, handoff_instance=peer)
     app.mainloop()
+    # R48: pystray's backend threads are non-daemon (verified in its
+    # source), and the Xorg backend can hang on displays with no
+    # systray manager. Every real cleanup already ran in on_close, so
+    # end the process hard instead of letting a stuck thread keep a
+    # windowless process alive after the user closed the app.
+    os._exit(0)
 
 
 if __name__ == "__main__":
