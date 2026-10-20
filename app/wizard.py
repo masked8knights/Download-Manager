@@ -4,9 +4,10 @@ The user's rule: "everything is done at startup, so that the user doesn't
 have to do anything manually." So when the app starts without a Torbox API
 key, main() opens this small centered dialog BEFORE the main window builds:
 the user pastes their Torbox API key (and, optionally, a free-tier GoFile
-token), Save writes them into .env with comments and unknown keys
-preserved, and the main window then builds with the real Config — no
-restart ever needed, because nothing has started yet.
+token), picks the download folder (R51: DOWNLOADS_DIR, only written when it
+differs from the default next to the app), Save writes them into .env with
+comments and unknown keys preserved, and the main window then builds with
+the real Config — no restart ever needed, because nothing has started yet.
 
 Values are masked (show="*"), never printed, never logged, and never
 returned to the caller in any form; the module communicates success with a
@@ -16,10 +17,10 @@ in later."""
 
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 # The keys this wizard writes. Names only — the values live in .env alone.
-_WIZARD_KEYS = ("TORBOX_API_KEY", "GOFILE_API_TOKEN")
+_WIZARD_KEYS = ("TORBOX_API_KEY", "GOFILE_API_TOKEN", "DOWNLOADS_DIR")
 
 
 def merge_env(path: Path, updates: dict) -> bool:
@@ -104,6 +105,30 @@ def run_startup_wizard(env_path: Path) -> bool:
     tok_box = ttk.Entry(frame, show="\u2022", width=52)
     tok_box.pack(fill="x", pady=(2, 10))
 
+    # R51 (user ask): the user chooses where downloads land, right here in
+    # the wizard. The default stays the downloads folder next to the app;
+    # the chosen path is only written to .env when it differs from that
+    # default, so a default install never pins an absolute path that would
+    # break if the app folder moves.
+    default_downloads = Path(env_path).parent / "downloads"
+    ttk.Label(frame, text="Download folder  (where finished downloads go)"
+              ).pack(anchor="w")
+    dir_row = ttk.Frame(frame)
+    dir_row.pack(fill="x", pady=(2, 10))
+    dir_box = ttk.Entry(dir_row, width=44)
+    dir_box.insert(0, str(default_downloads))
+    dir_box.pack(side="left", fill="x", expand=True)
+
+    def browse() -> None:
+        chosen = filedialog.askdirectory(parent=root, title="Choose the "
+                                                              "download folder")
+        if chosen:
+            dir_box.delete(0, "end")
+            dir_box.insert(0, str(Path(chosen)))
+
+    ttk.Button(dir_row, text="Browse\u2026", width=10, command=browse).pack(
+        side="left", padx=(6, 0))
+
     # R44 (user ask): search runs through qBittorrent's WebUI, and a fresh
     # qBittorrent has the WebUI off, so search silently can't work. Spell
     # the five clicks out right here — including the localhost bypass,
@@ -131,6 +156,11 @@ def run_startup_wizard(env_path: Path) -> bool:
         if not values["TORBOX_API_KEY"]:
             note.config(text="The Torbox API key is needed to add torrents.")
             return
+        # Only a changed download folder is written; the default is left
+        # implicit so the app follows its own folder if it ever moves.
+        chosen_dir = dir_box.get().strip()
+        if chosen_dir and Path(chosen_dir) != default_downloads:
+            values["DOWNLOADS_DIR"] = chosen_dir
         if merge_env(Path(env_path), values):
             saved["ok"] = True
             root.destroy()

@@ -688,14 +688,23 @@ class App(_TkBase):
 
         # ---- backend objects ----------------------------------------------
         self.presets = Presets()
+        # R51: the download root is the user's choice (DOWNLOADS_DIR from
+        # .env, picked in the startup wizard or Settings), falling back to
+        # the downloads folder next to the app. Created up front so the
+        # engine never has to create a user-chosen path lazily.
+        self.download_root = config.downloads_dir
+        try:
+            self.download_root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         if self.config.has("TORBOX_API_KEY"):
             self.engine = DownloadEngine(config.torbox_api_key,
                                          state_path=ROOT / "state.json",
-                                         download_root=ROOT / "downloads")
+                                         download_root=self.download_root)
         else:
             # Keep the UI alive and the saved downloads visible without a key.
             self.engine = DownloadEngine("", state_path=ROOT / "state.json",
-                                         download_root=ROOT / "downloads",
+                                         download_root=self.download_root,
                                          client=_NoKeyClient())
         self.gofile = GofileClient(config.gofile_api_token)
         self.qbit = QBitSearchClient(config.qbit_url, config.qbit_port,
@@ -2729,8 +2738,8 @@ class App(_TkBase):
     def _link_torrent_worker(self, link: str, name: str) -> None:
         """Daemon: fetch a .torrent URL, run the same file-upload path a
         dropped .torrent uses, then delete the fetched file."""
-        tmp = ROOT / "downloads" / "_links" / (name if name.endswith(".torrent")
-                                               else name + ".torrent")
+        tmp = self.engine.download_root / "_links" / (
+            name if name.endswith(".torrent") else name + ".torrent")
         try:
             tmp.parent.mkdir(parents=True, exist_ok=True)
             _fetch_url_to(link, tmp)
@@ -2751,7 +2760,7 @@ class App(_TkBase):
         """Daemon: download the pasted URL's file to downloads/_links/ and
         hand it to the GoFile drop worker (folder + upload + link log)."""
         name = _url_filename(link)
-        dest = ROOT / "downloads" / "_links" / name
+        dest = self.engine.download_root / "_links" / name
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
             _fetch_url_to(link, dest)
@@ -5039,9 +5048,35 @@ class App(_TkBase):
                              "Keep on Torbox")).grid(
             row=handoff_row, column=1, sticky="w", padx=(0, 14), pady=(8, 3))
 
+        # R51: the download folder (DOWNLOADS_DIR), also chosen in the
+        # startup wizard for new installs. Only written when it differs
+        # from the default next to the app, so a default install never
+        # pins an absolute path that would break if the app folder moves.
+        default_downloads = ROOT / "downloads"
+        downloads_row = handoff_row + 1
+        ttk.Label(win, text="Download folder:").grid(
+            row=downloads_row, column=0, sticky="e", padx=(14, 6), pady=3)
+        dir_row = ttk.Frame(win)
+        dir_row.grid(row=downloads_row, column=1, sticky="ew",
+                     padx=(0, 14), pady=3)
+        dir_var = tk.StringVar(
+            value=str(self._read_env_values().get("DOWNLOADS_DIR")
+                      or default_downloads))
+
+        def browse_downloads() -> None:
+            chosen = filedialog.askdirectory(parent=win,
+                                             title="Choose the download folder")
+            if chosen:
+                dir_var.set(str(Path(chosen)))
+
+        ttk.Entry(dir_row, textvariable=dir_var, width=30).pack(
+            side="left", fill="x", expand=True)
+        ttk.Button(dir_row, text="Browse…", width=10,
+                   command=browse_downloads).pack(side="left", padx=(6, 0))
+
         ttk.Button(win, text="Register file associations", width=24,
                    command=self.on_register_associations).grid(
-            row=handoff_row + 1, column=0, columnspan=2,
+            row=downloads_row + 1, column=0, columnspan=2,
             sticky="w", padx=14, pady=(4, 2))
 
         # R47: start qBittorrent automatically when the app launches and its
@@ -5050,7 +5085,7 @@ class App(_TkBase):
         ttk.Checkbutton(win, text="Start qBittorrent automatically when "
                                   "needed",
                         variable=autostart_var).grid(
-            row=handoff_row + 2, column=0, columnspan=2,
+            row=downloads_row + 2, column=0, columnspan=2,
             sticky="w", padx=14, pady=(4, 2))
 
         def save() -> None:
@@ -5060,13 +5095,19 @@ class App(_TkBase):
             values["HANDOFF_DEFAULT"] = label_to_value.get(
                 handoff_var.get(), "ask")
             values["QBIT_AUTOSTART"] = "1" if autostart_var.get() else "0"
+            # R51: only a changed download folder is written; the default is
+            # left implicit (same rule as the startup wizard) so the app
+            # follows its own folder if it ever moves.
+            chosen_dir = dir_var.get().strip()
+            if chosen_dir and Path(chosen_dir) != default_downloads:
+                values["DOWNLOADS_DIR"] = chosen_dir
             # The default applies right away; no restart needed for it.
             self._handoff_default_setting = values["HANDOFF_DEFAULT"]
             win.destroy()
             threading.Thread(target=self._settings_save_worker, args=(values,),
                              daemon=True, name="settings-save").start()
 
-        button_row = len(self.SETTINGS_FIELDS) + 7
+        button_row = len(self.SETTINGS_FIELDS) + 8
         ttk.Button(win, text="Save", command=save).grid(
             row=button_row, column=0, sticky="ew", padx=(14, 4), pady=(6, 12))
         ttk.Button(win, text="Cancel", command=win.destroy).grid(

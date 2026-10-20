@@ -2,7 +2,7 @@
 
 .env variable names read here (names only, values live in .env itself):
 TORBOX_API_KEY, GOFILE_API_TOKEN, QBIT_URL, QBIT_PORT, QBIT_USERNAME,
-QBIT_PASSWORD, GOFILE_TTL_DAYS."""
+QBIT_PASSWORD, GOFILE_TTL_DAYS, DOWNLOADS_DIR."""
 
 from pathlib import Path
 
@@ -98,3 +98,24 @@ class Config:
         that a GoFile link can never be the default behavior."""
         value = str(self._values.get("HANDOFF_DEFAULT", "")).strip().lower()
         return value if value in ("ask", "pc", "torbox") else "ask"
+
+    @property
+    def downloads_dir(self) -> Path:
+        """Where downloads land: <DOWNLOADS_DIR from .env>, else ROOT/downloads.
+
+        R51: the user picks this in the startup wizard (and can change it in
+        Settings later). An empty, relative, or home-tilded value is resolved
+        (a leading ~ expands to the user's home); a value that resolves to
+        nothing usable still returns the path as chosen — the engine creates
+        the folder on demand, and only a completely missing or blank key
+        falls back to the in-app downloads folder. Never logged or printed."""
+        raw = str(self._values.get("DOWNLOADS_DIR", "")).strip()
+        if not raw:
+            return ROOT / "downloads"
+        try:
+            path = Path(raw).expanduser()
+        except (RuntimeError, OSError):
+            return ROOT / "downloads"
+        if not path.is_absolute():
+            return ROOT / "downloads"
+        return path
