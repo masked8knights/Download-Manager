@@ -259,9 +259,15 @@ def _launch_detached(cmd: list[str]) -> subprocess.Popen | None:
     if sys.platform == "win32":
         flags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
             getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        subprocess.Popen(cmd, creationflags=flags,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return None
+        proc = subprocess.Popen(cmd, creationflags=flags,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        # R52c: return the handle so ensure_running() records the launch
+        # and shutdown_started() can close this qBittorrent when the app
+        # closes — before this it returned None on Windows and the app
+        # never owned the qBittorrent it had started.
+        threading.Timer(10.0, proc.poll).start()
+        return proc
     env = {name: value for name, value in os.environ.items()
            if name not in ("LD_LIBRARY_PATH", "LD_PRELOAD",
                            "PYTHONPATH", "PYTHONHOME")}
