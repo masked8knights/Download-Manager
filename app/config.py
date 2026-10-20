@@ -79,6 +79,16 @@ class Config:
         return value
 
     @property
+    def qbit_autostart(self) -> bool:
+        """Start qBittorrent automatically when the app needs its WebUI (R47).
+
+        QBIT_AUTOSTART in .env, default on. Only an explicit off value
+        ("0", "false", "no", "off") disables it; a missing or unrecognized
+        value reads as on, like handoff_default's garbage handling."""
+        value = str(self._values.get("QBIT_AUTOSTART", "")).strip().lower()
+        return value not in ("0", "false", "no", "off")
+
+    @property
     def handoff_default(self) -> str:
         """What a handed-off torrent does once it is cached on Torbox (R36).
 

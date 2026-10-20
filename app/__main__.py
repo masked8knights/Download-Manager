@@ -197,6 +197,7 @@ from gamever import game_version, version_tags
 from gofile import GofileClient, GofileError
 from presets import Presets
 from qbitsearch import QBitError, QBitSearchClient, SearchItem, human_size
+import qbitstart
 from theme import Theme, apply_theme
 from icons import cog_photo, folder_photo
 from icon import make_photo_image
@@ -706,8 +707,21 @@ class App(_TkBase):
         # dropdown), run qBittorrent's own plugin-update pass once at startup
         # (the same thing the GUI's "Check for Updates" does), then refetch
         # the list. A forced repeat lives in Settings. Daemon.
-        threading.Thread(target=self._plugin_update_worker, args=(False,),
-                         daemon=True, name="plugin-update").start()
+        # R47: qBittorrent must be running for Search. When its WebUI does
+        # not answer at startup, find and start it first (QBIT_AUTOSTART,
+        # on by default, off in Settings) and only then run the plugin
+        # pass — so the plugin list is fetched once qBittorrent actually
+        # answers instead of erroring on the first try.
+        def _qbit_autostart_then_plugins() -> None:
+            try:
+                qbitstart.ensure_running(
+                    self.qbit, self.config.qbit_autostart,
+                    lambda text: self.post_event("log", text.rstrip("\n")))
+            except Exception as exc:  # never let the helper kill the thread
+                self.post_event("log", f"qBittorrent autostart failed: {exc}")
+            self._plugin_update_worker(False)
+        threading.Thread(target=_qbit_autostart_then_plugins,
+                         daemon=True, name="qbit-autostart").start()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(100, self._drain)
@@ -4983,19 +4997,29 @@ class App(_TkBase):
             row=handoff_row + 1, column=0, columnspan=2,
             sticky="w", padx=14, pady=(4, 2))
 
+        # R47: start qBittorrent automatically when the app launches and its
+        # WebUI is not reachable yet (on by default).
+        autostart_var = tk.BooleanVar(value=self.config.qbit_autostart)
+        ttk.Checkbutton(win, text="Start qBittorrent automatically when "
+                                  "needed",
+                        variable=autostart_var).grid(
+            row=handoff_row + 2, column=0, columnspan=2,
+            sticky="w", padx=14, pady=(4, 2))
+
         def save() -> None:
             # Read the values FIRST — after destroy() the entries are gone.
             values = {name: entry.get().strip()
                       for name, (entry, _secret) in entries.items()}
             values["HANDOFF_DEFAULT"] = label_to_value.get(
                 handoff_var.get(), "ask")
+            values["QBIT_AUTOSTART"] = "1" if autostart_var.get() else "0"
             # The default applies right away; no restart needed for it.
             self._handoff_default_setting = values["HANDOFF_DEFAULT"]
             win.destroy()
             threading.Thread(target=self._settings_save_worker, args=(values,),
                              daemon=True, name="settings-save").start()
 
-        button_row = len(self.SETTINGS_FIELDS) + 6
+        button_row = len(self.SETTINGS_FIELDS) + 7
         ttk.Button(win, text="Save", command=save).grid(
             row=button_row, column=0, sticky="ew", padx=(14, 4), pady=(6, 12))
         ttk.Button(win, text="Cancel", command=win.destroy).grid(
