@@ -41,7 +41,12 @@ class Config:
     # Not secrets
     @property
     def qbit_url(self) -> str:
-        return self._values.get("QBIT_URL", "http://127.0.0.1").rstrip("/")
+        # R45: an EMPTY QBIT_URL= line (the Settings popup writes every
+        # known key, blank ones included) must fall back to the default
+        # just like a missing one — a bare "" built the URL ":8080/api/…"
+        # and broke search with "unknown url type".
+        value = str(self._values.get("QBIT_URL", "") or "").strip().rstrip("/")
+        return value or "http://127.0.0.1"
 
     @property
     def qbit_port(self) -> int:

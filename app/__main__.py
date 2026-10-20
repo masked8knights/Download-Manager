@@ -4884,6 +4884,14 @@ class App(_TkBase):
         win.resizable(False, False)
         win.transient(self)
         current = self._read_env_values()
+        # R45: blank entries must not round-trip as empty .env lines — a
+        # saved QBIT_URL= built the URL ":8080/api/…" and broke search
+        # ("unknown url type"). Prefill the qBittorrent fields with the
+        # same defaults Config applies, so Save writes working values.
+        for _name, _default in (("QBIT_URL", "http://127.0.0.1"),
+                                ("QBIT_PORT", "8080")):
+            if not current.get(_name):
+                current[_name] = _default
 
         ttk.Label(win, text="Edit settings (saved to .env; values are never "
                             "logged).\nRestart the app after saving to apply.",

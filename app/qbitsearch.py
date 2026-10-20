@@ -92,7 +92,11 @@ class QBitSearchClient:
     def __init__(self, url: str = "http://127.0.0.1", port: int = 8080,
                  username: str = "", password: str = "",
                  timeout: float = DEFAULT_TIMEOUT) -> None:
-        self.url = url.rstrip("/")
+        # R45: an empty url (blank QBIT_URL= in .env) would build ":8080"
+        # and every request would fail with "unknown url type"; fall back
+        # to the same default Config uses. Strip first so whitespace-only
+        # values count as empty too.
+        self.url = (url or "").strip().rstrip("/") or "http://127.0.0.1"
         self.port = port
         self.username = username
         self.password = password
