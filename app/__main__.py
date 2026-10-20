@@ -562,6 +562,19 @@ class _NoKeyClient:
     delete_torrent = _fail
 
 
+def _wheel_scrollable(event):
+    """R50: the innermost scrollable widget under the pointer — a table, the
+    log, a list, or a combobox — or None when the wheel is over plain page
+    content. The widget walk follows .master so wrapped containers (frames
+    around a tree) still resolve to the scrollable inside."""
+    w = getattr(event, "widget", None)
+    while w is not None:
+        if isinstance(w, (ttk.Treeview, tk.Text, tk.Listbox, ttk.Combobox)):
+            return w
+        w = getattr(w, "master", None)
+    return None
+
+
 class App(_TkBase):
     def __init__(self, config: Config, handoff_instance=None):
         super().__init__()
@@ -855,23 +868,30 @@ class App(_TkBase):
         container.bind("<Configure>", _sync_scroll)
 
         def _on_wheel(event) -> None:
-            # mouse wheel scrolls the page, but never hijacks it from the
-            # widgets that scroll themselves (tables, the log, comboboxes)
-            w = getattr(event, "widget", None)
-            while w is not None:
-                if isinstance(w, (ttk.Treeview, tk.Text, tk.Listbox,
-                                  ttk.Combobox)):
-                    return
-                w = getattr(w, "master", None)
+            # Windows/macOS MouseWheel: the inner widget's own class
+            # binding scrolls it, so this only decides between "let the
+            # widget win" and "scroll the page" (R50: scrolling in a table
+            # never moves the whole app).
+            if _wheel_scrollable(event) is not None:
+                return
             step = (-1 if getattr(event, "delta", 0) > 0 else 1)
             scroll.yview_scroll(step, "units")
 
         def _on_wheel_linux(event) -> None:
-            scroll.yview_scroll(-1 if event.num == 4 else 1, "units")
+            # X11 Button-4/5: classic widgets (Text, Listbox) scroll
+            # themselves via their own class bindings, but ttk widgets have
+            # NO X11 wheel binding at all — without this the whole page
+            # scrolled instead of the table under the pointer (R50).
+            w = _wheel_scrollable(event)
+            if w is None:
+                scroll.yview_scroll(-1 if event.num == 4 else 1, "units")
+            elif isinstance(w, ttk.Treeview):
+                w.yview_scroll(-1 if event.num == 4 else 1, "units")
 
         # bound app-wide: the content frame covers the canvas, so a plain
-        # canvas bind would never fire; the widget check above lets inner
-        # scrollables (tables, the log, comboboxes) win the wheel instead
+        # canvas bind would never fire; the widget check above sends the
+        # wheel to the inner scrollable (tables, the log, comboboxes) and
+        # the page only scrolls everywhere else
         self.bind_all("<MouseWheel>", _on_wheel)
         self.bind_all("<Button-4>", _on_wheel_linux)
         self.bind_all("<Button-5>", _on_wheel_linux)
@@ -1835,8 +1855,8 @@ class App(_TkBase):
                           "made; one at a time.")
             return
         self._torbox_link_running.add(infohash)
-        self.log_line(f"Making a GoFile link for '{name}' (fetch from Torbox "
-                      "to this PC first if needed, then upload)…")
+        self.log_line(f"Making a GoFile link for '{name}' (Torbox sends it "
+                      "straight to GoFile)…")
         self.set_status(True, f"Linking '{name}'…")
         threading.Thread(target=self._torbox_link_worker,
                          args=(infohash, name),
@@ -1844,9 +1864,9 @@ class App(_TkBase):
 
     def _start_result_link(self, item) -> None:
         """R22 starter for the results origin of 'Make GoFile link': the
-        magnet is added to Torbox (or its existing record is found), fetched
-        to the PC when it is ready, then uploaded — the full chain, as the
-        user confirmed."""
+        magnet is added to Torbox (or its existing record is found); when
+        it is ready Torbox sends it straight to GoFile (R50: never
+        fetched to the PC just to upload)."""
         name = item.name or "search result"
         magnet = item.file_url or ""
         if not magnet.startswith("magnet:"):
@@ -1862,8 +1882,9 @@ class App(_TkBase):
                           "made; one at a time.")
             return
         self._torbox_link_running.add(infohash)
-        self.log_line(f"Making a GoFile link for '{name}' (add to Torbox, "
-                      "fetch to this PC when it is ready, then upload)…")
+        self.log_line(f"Making a GoFile link for '{name}' (add to Torbox; "
+                      "when it is ready Torbox sends it straight to "
+                      "GoFile)…")
         self.set_status(True, f"Linking '{name}'…")
         threading.Thread(target=self._result_link_worker,
                          args=(magnet, infohash, name),
@@ -2125,8 +2146,10 @@ class App(_TkBase):
             # as one zip; nothing is ever fetched to this PC and no local
             # copy is created, so there is nothing to clean up afterwards.
             # The token is GOFILE_API_TOKEN from .env, passed per request —
-            # never anything stored on the Torbox dashboard. Any failure
-            # falls through to the old fetch-to-PC + upload chain below.
+            # never anything stored on the Torbox dashboard. R50: a failure
+            # never falls back to fetching to this PC; when the files are
+            # already local the local copy is uploaded instead, otherwise
+            # the link job stops with a clear error.
             # A record the engine marked "failed" (its PC fetch failed)
             # keeps the old error here; press Download to re-fetch it.
             if upload and int(record.get("torbox_id") or 0):
@@ -2140,9 +2163,33 @@ class App(_TkBase):
                     return
                 except Exception as exc:
                     detail = str(exc) or type(exc).__name__
+                    # R50 (user: "gofile only ever sends from torbox, not
+                    # from the pc"): a failed direct transfer never downloads
+                    # the torrent to this PC just to upload it. When the
+                    # files are ALREADY here (the user downloaded them
+                    # first, or an archived record kept its folder) the
+                    # local copy is uploaded from here instead and kept;
+                    # otherwise the link job stops right here.
+                    has_local = False
+                    try:
+                        has_local = (bool(record.get("folder"))
+                                     and Path(str(record["folder"])).is_dir())
+                    except OSError:
+                        has_local = False
+                    if not has_local:
+                        self.post_event(
+                            "log", f"Direct Torbox->GoFile transfer for "
+                            f"'{name}' failed ({detail}); the link was not "
+                            "made. GoFile links are sent from Torbox, never "
+                            "downloaded to this PC first. Try again later.")
+                        self.post_event("status",
+                                        (False, f"Linking '{name}' failed"))
+                        return
                     self.post_event("log", f"Direct Torbox->GoFile transfer "
-                                    f"for '{name}' failed ({detail}); falling "
-                                    "back to fetch-to-PC + upload.")
+                                    f"for '{name}' failed ({detail}); the "
+                                    "files are already on this PC, so the "
+                                    "link is made from the local copy "
+                                    "(which stays).")
             needs_fetch = record.get("status") == "held" \
                 or not record.get("folder")
             # (2b) R22: Torbox can mark a torrent "cached" BEFORE it has

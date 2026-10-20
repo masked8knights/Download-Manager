@@ -43,9 +43,9 @@ Proven-live facts respected (see also app/torbox.py's notes):
 unpack() is EXPLICIT and separate: the poll/refresh path never unpacks. It
 extracts .zip pieces with stdlib zipfile; .rar pieces (including multi-part
 .part1.rar/.r00 sets) need an external tool found on PATH — 7z, 7za, unrar,
-in that order. Nothing is bundled. Pieces stay in the download folder; only
-extracted files land in the destination (the pieces folder is what GoFile
-gets, task 5).
+in that order. Nothing is bundled. On success the archives themselves are
+deleted from the download folder (R50); non-archive files stay there, and
+only extracted files land in the destination.
 
 No secrets are ever printed or logged by this module.
 """
@@ -993,7 +993,9 @@ class DownloadEngine:
         .zip pieces: stdlib zipfile. .rar pieces (incl. multi-part sets):
         an external tool from PATH — 7z, 7za, unrar, in that order; a clear
         error names the missing tool when none is installed (nothing bundled).
-        Pieces stay in the download folder; only extracted files land in dest.
+        On success the archives are DELETED from the download folder (R50:
+        the user wants the .zip/.rar pieces gone once unpacked); non-archive
+        files stay, and nothing is deleted when any extraction failed.
         dest is created if missing. On success: unpacked=True, unpack_dest=dest,
         status stays "complete" (semantics unchanged). Returns the extracted
         paths."""
@@ -1035,6 +1037,30 @@ class DownloadEngine:
         if failed_zips:
             raise RuntimeError("zip extraction failed for: "
                                + ", ".join(failed_zips))
+        # R50 (user: "deleted the .zip or .rar file or anything like that
+        # after it has unpacked"): every archive that extracted cleanly is
+        # removed from the download folder now that its contents are in
+        # dest. Nothing is deleted unless ALL extractions above succeeded,
+        # and non-archive files (the torrent's other pieces) stay.
+        removed = 0
+        for archive in archives:
+            if archive.suffix.lower() == ".zip":
+                try:
+                    archive.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+        if any(a.suffix.lower() == ".rar" for a in archives):
+            for path in folder.iterdir():
+                if not path.is_file():
+                    continue
+                suffix = path.suffix.lower()
+                if suffix == ".rar" or re.fullmatch(r"\.[rs]\d{2}", suffix):
+                    try:
+                        path.unlink()
+                        removed += 1
+                    except OSError:
+                        pass
         extracted = [p for p in extracted if p not in before] or extracted
         self.store.update(infohash, unpacked=True, unpack_dest=str(dest),
                           status="complete")
