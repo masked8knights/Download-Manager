@@ -245,6 +245,21 @@ class QBitSearchClient:
         """Delete a search job and its cached results on the qBittorrent side."""
         self._post_form("/api/v2/search/delete", {"id": str(job_id)})
 
+    # ---- R49: application-level controls used by qbitstart ---------------
+
+    def set_app_preferences(self, prefs: dict) -> None:
+        """Merge a partial preferences dict into qBittorrent's settings.
+
+        The same endpoint the GUI's settings dialog saves through; only the
+        given keys change, everything else is left as the user set it.
+        """
+        self._post_form("/api/v2/app/setPreferences",
+                        {"json": json.dumps(prefs)})
+
+    def shutdown_app(self) -> None:
+        """Ask qBittorrent to quit cleanly through its own shutdown API."""
+        self._post_form("/api/v2/app/shutdown", {})
+
     def _post_form(self, path: str, form: dict[str, str]) -> str:
         return self._request("POST", path, form=form)
 

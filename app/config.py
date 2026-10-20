@@ -89,17 +89,6 @@ class Config:
         return value not in ("0", "false", "no", "off")
 
     @property
-    def tray_start(self) -> bool:
-        """Open into the system tray on launch when a tray exists (R48).
-
-        TRAY_START in .env, default on. Only an explicit off value
-        ("0", "false", "no", "off") disables it; a missing or
-        unrecognized value reads as on. When a tray is unusable the
-        window opens normally regardless of this flag."""
-        value = str(self._values.get("TRAY_START", "")).strip().lower()
-        return value not in ("0", "false", "no", "off")
-
-    @property
     def handoff_default(self) -> str:
         """What a handed-off torrent does once it is cached on Torbox (R36).
 
