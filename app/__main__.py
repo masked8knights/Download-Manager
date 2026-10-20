@@ -3230,10 +3230,30 @@ class App(_TkBase):
         self._gofile_crumbs_base = crumbs
         self.gofile_crumbs.configure(text=crumbs)
 
+    def _gofile_token_reload(self) -> None:
+        """R52b: re-read GOFILE_API_TOKEN from .env. The app reads .env
+        once at startup, so a token added or replaced while the app is
+        running never reached the GoFile client — this runs at the GoFile
+        entry points (Refresh, the half-hour auto-refresh, Make GoFile
+        link) so an .env edit is picked up on the next use, no restart
+        needed. The value itself is never printed or logged."""
+        try:
+            fresh = Config(self.config.env_path).gofile_api_token
+        except Exception:
+            return
+        if (fresh or "").strip() == (self.gofile.token or "").strip():
+            return
+        self.gofile = GofileClient(fresh)
+        # A different (or first) token may belong to a different account:
+        # forget the remembered root id so the next refresh re-resolves it.
+        self._gofile_root_id = ""
+        self.log_line("GoFile: token reloaded from .env.")
+
     def on_gofile_storage_refresh(self, show_errors: bool = True) -> None:
         """Refresh: reload the account ROOT (R31: the table always shows
         the root; folders expand inline under their own rows). Runs on a
         daemon thread; the result comes back through the event queue."""
+        self._gofile_token_reload()
         if self._gofile_loading:
             return
         content_id = str(self._gofile_root_id or "")
@@ -4526,6 +4546,7 @@ class App(_TkBase):
         A search result runs the full chain (add to Torbox, wait, fetch to
         the PC, upload); a torbox row is adopted/fetched/uploaded; a
         downloads row uploads what is already here."""
+        self._gofile_token_reload()
         origin, payload = self._origin_selection()
         if payload is None:
             self.log_line("Click a row in one of the tables first, then "
