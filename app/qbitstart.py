@@ -12,9 +12,11 @@ No secrets are ever printed or logged by this module.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Callable
@@ -72,15 +74,29 @@ def find_qbittorrent_command() -> list[str] | None:
 
 
 def _launch_detached(cmd: list[str]) -> None:
-    """Start qBittorrent so it outlives this process and opens no console."""
+    """Start qBittorrent so it outlives this process and opens no console.
+
+    R47b: on POSIX a frozen (PyInstaller one-file) app runs with
+    LD_LIBRARY_PATH pointing at its own extracted bundle. Inherited by
+    qBittorrent, that makes the system loader resolve qBittorrent's
+    libraries against the bundle's older copies and it dies on the spot
+    (verified live on Nobara: "libssl.so.3: version `OPENSSL_3.2.0' not
+    found"). The child is launched with the loader variables stripped, so
+    it sees the system's own libraries, and an early exit is reaped so it
+    cannot linger as a zombie under the long-lived app process.
+    """
     if sys.platform == "win32":
         flags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
             getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         subprocess.Popen(cmd, creationflags=flags,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    else:
-        subprocess.Popen(cmd, start_new_session=True,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    env = {name: value for name, value in os.environ.items()
+           if name not in ("LD_LIBRARY_PATH", "LD_PRELOAD",
+                           "PYTHONPATH", "PYTHONHOME")}
+    proc = subprocess.Popen(cmd, start_new_session=True, env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    threading.Timer(10.0, proc.poll).start()
 
 
 def ensure_running(client, autostart: bool,
