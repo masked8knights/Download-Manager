@@ -4,10 +4,14 @@ Drives qBittorrent's WebUI API v2 search endpoints over plain HTTP:
 search/start, search/status, search/results, search/stop, search/delete,
 search/plugins, plus app/version as a connectivity probe.
 
-The target is the local WebUI (default http://127.0.0.1:8080, built for
-LocalhostAuth=false so no login is needed). If a username and password are
-configured, a one-time /auth/login is performed lazily and the session cookie
-is kept in a cookie jar shared by all requests.
+The target is the local WebUI (default http://127.0.0.1:8080, usually with
+LocalhostAuth=false). R52: /auth/login is performed ONCE for every client,
+even with empty credentials — qBittorrent 5.x scopes search jobs to the
+WebUI session cookie, and with the localhost bypass on an empty-credential
+login still issues the SID cookie. Without it, search/start returns a job
+id that search/status and search/results can never see again (proven live
+against v5.2.3 on the machine where search "worked" only from the GUI).
+The session cookie is kept in a cookie jar shared by all requests.
 
 This module is standalone on purpose: it imports nothing from sibling app
 modules, so the TESTS/ scripts can import it directly via sys.path.
@@ -125,7 +129,15 @@ class QBitSearchClient:
     def _login_locked(self) -> None:
         """POST /auth/login once; stores the SID cookie in the shared jar.
 
-        Credentials are never included in any error message.
+        R52: runs for every client, empty credentials included. With the
+        localhost bypass on, qBittorrent may answer anything for this call
+        (an empty-credential login is not a credential check), so the body
+        is only enforced when credentials were actually supplied; the SID
+        cookie is what matters and is picked up by the shared cookie jar.
+        When the bypass is OFF and credentials are empty, no SID is issued
+        and every later request fails with HTTP 401 — the error surfaces
+        then, which is the honest answer. Credentials are never included
+        in any error message.
         """
         form = urllib.parse.urlencode(
             {"username": self.username, "password": self.password}
@@ -138,12 +150,22 @@ class QBitSearchClient:
         try:
             body = self._opener.open(req, timeout=self.timeout).read()
         except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403) and not (self.username or self.password):
+                # Bypass off and no credentials: the later requests will
+                # carry the same failure, so raise the unreachable/needs-
+                # credentials message rather than a login one.
+                raise QBitError(
+                    f"qBittorrent WebUI requires credentials at {self.url} "
+                    "(set QBIT_USERNAME/QBIT_PASSWORD, or enable the "
+                    "localhost bypass in qBittorrent's WebUI settings)"
+                ) from exc
             raise QBitError(f"qBittorrent login failed: HTTP {exc.code}") from exc
         except urllib.error.URLError as exc:
             raise self._unreachable_error() from exc
         except TimeoutError as exc:
             raise QBitError(f"qBittorrent WebUI timed out after {self.timeout}s") from exc
-        if body.decode("utf-8", errors="replace").strip() != "Ok.":
+        if body.decode("utf-8", errors="replace").strip() != "Ok." \
+                and (self.username or self.password):
             raise QBitError("qBittorrent login failed: wrong username or password")
         self._logged_in = True
 
@@ -160,7 +182,12 @@ class QBitSearchClient:
             headers["Content-Type"] = "application/x-www-form-urlencoded"
         req = urllib.request.Request(target, data=data, headers=headers, method=method)
         with self._lock:
-            if (self.username or self.password) and not self._logged_in:
+            if not self._logged_in:
+                # R52: log in even with empty credentials. With the
+                # localhost bypass on, qBittorrent still issues the SID
+                # cookie on this call, and 5.x scopes search jobs to that
+                # cookie — without it the job id from search/start is
+                # orphaned (status returns [] and results says Not Found).
                 self._login_locked()
             try:
                 with self._opener.open(req, timeout=self.timeout) as resp:
